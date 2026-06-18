@@ -38,7 +38,7 @@ The collection ecosystem operates through two distinct pipelines engineered to m
 
 
 ```
-### 1. Financial Ingestion Pipeline (`scraper/collect_market_data.py`)
+### 1. Financial Ingestion Pipeline (`scrapers/AI_Stock.py`)
 
 Scope: Captures full-depth, historical trading indicators (Open, High, Low, Close, Volume) since 2018-01-01.
 
@@ -47,7 +47,7 @@ Scope: Captures full-depth, historical trading indicators (Open, High, Low, Clos
 * **Compute/AI Layer:** NVIDIA (`NVDA`), META (`META`), Alphabet (`GOOGL`)
 * **Cooling & Rack Infrastructure:** Vertiv (`VRT`), Modine Manufacturing (`MOD`), Super Micro Computer (`SMCI`)
 
-### 2. Alternative Textual Scraper (`scraper/collect_infrastructure_news.py`)
+### 2. Alternative Textual Scraper (`scrapers/collect_infrastructure_news.py`)
 
 Scope: Bypasses deep cloud security firewalls via native browser automation to isolate infrastructure-specific signals.
 
@@ -59,12 +59,14 @@ Scope: Bypasses deep cloud security firewalls via native browser automation to i
 ### 📂 Repository Structure
 
 ```text
-├── scraper/                        # Core collection engine scripts
-│   ├── collect_market_data.py      # Daily historical market data ingestion script
+├── scrapers/                       # Core collection engine scripts
+│   ├── AI_Stock.py                 # Daily historical market data ingestion script
 │   └── collect_infrastructure_news.py # Headless browser alternative text extraction script
 ├── data_samples/                   # Public data warehouse location for Phase 1 verification
 │   ├── ai_infrastructure_stock_data.csv # Output time-series data
+│   ├── all_found_news_debug.csv    # Debug dump of all scraped news
 │   └── raw_alternative_news_data.csv    # Filtered project-relevant news indicators
+├── requirements.txt                # Python package dependencies
 └── README.md                       # Core pipeline documentation
 ```
 
@@ -82,7 +84,7 @@ cd your-repo-name
 #### 2. Install Package Dependencies
 
 ```bash
-pip install yfinance pandas requests selenium webdriver-manager scrapy
+pip install -r requirements.txt
 ```
 
 ### 🏃 Execution Manual
@@ -92,7 +94,7 @@ pip install yfinance pandas requests selenium webdriver-manager scrapy
 To run the automated market acquisition loop and output to the unified CSV index, execute:
 
 ```bash
-python3 collect_market_data.py
+python3 scrapers/AI_Stock.py
 ```
 
 ### Ingest Grid & Cooling Alternative Indicators
@@ -100,7 +102,7 @@ python3 collect_market_data.py
 To spawn the automated scraping sequence, invoke the headless browser engine using:
 
 ```bash
-python3 collect_infrastructure_news.py
+python3 scrapers/collect_infrastructure_news.py
 ```
 
 ### 📊 Dataset Metadata & Features

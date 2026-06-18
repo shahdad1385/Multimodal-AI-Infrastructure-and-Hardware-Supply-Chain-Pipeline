@@ -2,3 +2,10 @@
 P1.md
 P2.md
 P3.md
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
+.*
