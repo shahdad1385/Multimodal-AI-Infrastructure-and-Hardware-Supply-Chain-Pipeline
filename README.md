@@ -10,34 +10,38 @@ The core objective is to map lag-correlations between physical constraints—suc
 
 ### 🛠️ System Architecture & Data Flow
 
-The collection ecosystem operates through two distinct pipelines engineered to minimize anti-bot latency and handle JavaScript-heavy DOM rendering.
-
 ```text
-                  ┌───────────────────────────────┐
-                  │    Target Infrastructure      │
-                  └───────────────┬───────────────┘
-                                  │
-         ┌────────────────────────┴────────────────────────┐
-         ▼                                                 ▼
-┌─────────────────────────────────┐               ┌─────────────────────────────────┐
-│       Yahoo Finance Web API     │               │  DataCenterDynamics News Portal │
-├─────────────────────────────────┤               ├─────────────────────────────────┤
-│ • Requests Library Ingestion    │               │ • Headless Selenium Engine      │
-│ • Maximum Time Horizon (2018+)  │               │ • Dynamic Scroll & Render Loop  │
-│ • Standardized Numerical CSV    │               │ • Keyword Matrix Soft-Filtering │
-└────────────────\────────────────┘               └────────────────/────────────────┘
-                  \                                               /
-                   \──────────────────────┬──────────────────────/
-                                          ▼
+                   ┌───────────────────────────────┐
+                   │    Target Infrastructure      │
+                   └───────────────┬───────────────┘
+                                   │
+          ┌────────────────────────┴────────────────────────┐
+          ▼                                                 ▼
+┌─────────────────────────────────┐   ┌─────────────────────────────────┐
+│       Yahoo Finance Web API     │   │   Multi-Source News Collector   │
+├─────────────────────────────────┤   ├─────────────────────────────────┤
+│ • yfinance Library Ingestion    │   │ • TechCrunch AI (RSS)          │
+│ • Maximum Time Horizon (2018+)  │   │ • Semiconductor Engineering    │
+│ • Standardized Numerical CSV    │   │ • The Register (Atom feed)     │
+└─────────────────────────────────┘   │ • Tom's Hardware (RSS)         │
+                                      │ • SemiAnalysis (RSS)           │
+                                      │ • DataCenterDynamics (HTML)    │
+                                      │ • Keyword Matrix Filtering     │
+                                      │ • Cross-source Deduplication   │
+                                      └─────────────────────────────────┘
+                         \                           /
+                          \─────────────┬───────────/
+                                        ▼
                            ┌─────────────────────────────┐
                            │    /data_samples Output     │
                            ├─────────────────────────────┤
                            │  • Market Time Series Data  │
-                           │  • Raw Alternative News Data│
+                           │  • Filtered AI News Dataset │
+                           │  • Raw All-News Dataset     │
+                           │  • Visualization Charts     │
                            └─────────────────────────────┘
-
-
 ```
+
 ### 1. Financial Ingestion Pipeline (`scrapers/AI_Stock.py`)
 
 Scope: Captures full-depth, historical trading indicators (Open, High, Low, Close, Volume) since 2018-01-01.
@@ -47,32 +51,48 @@ Scope: Captures full-depth, historical trading indicators (Open, High, Low, Clos
 * **Compute/AI Layer:** NVIDIA (`NVDA`), META (`META`), Alphabet (`GOOGL`)
 * **Cooling & Rack Infrastructure:** Vertiv (`VRT`), Modine Manufacturing (`MOD`), Super Micro Computer (`SMCI`)
 
-### 2. Alternative Textual Scraper (`scrapers/collect_infrastructure_news.py`)
+### 2. Multi-Source News Collector (`scrapers/collect_infrastructure_news.py`)
 
-Scope: Bypasses deep cloud security firewalls via native browser automation to isolate infrastructure-specific signals.
+Scope: Collects AI infrastructure and semiconductor news from 6 sources using RSS feeds and HTML scraping.
 
-**Feature Extraction Matrix:** Evaluates daily press feeds against a targeted boolean token index:
-`["cooling", "liquid", "immersion", "datacenter", "tsmc", "semiconductor", "power plant", "grid", "electricity"]`
+**News Sources:**
+
+| Source | Method | Focus Area |
+|---|---|---|
+| TechCrunch AI | RSS | Artificial intelligence, tech |
+| Semiconductor Engineering | RSS | Semiconductor, chips |
+| The Register | Atom RSS | Data center, infrastructure |
+| Tom's Hardware | RSS | Hardware, semiconductor |
+| SemiAnalysis | RSS | Semiconductor analysis |
+| DataCenterDynamics | HTML scraping | Data center infrastructure |
+
+**Keyword Filtering:** Articles are filtered against a matrix of AI infrastructure terms including: `ai`, `semiconductor`, `nvidia`, `tsmc`, `data center`, `cooling`, `power`, `grid`, `gpu`, and more.
+
+### 3. Data Visualization (`scrapers/visualize_data.py`)
+
+Scope: Generates publication frequency, source distribution, keyword frequency, timeline, and headline length charts from collected data.
 
 ---
 
 ### 📂 Repository Structure
 
 ```text
-├── scrapers/                       # Core collection engine scripts
-│   ├── AI_Stock.py                 # Daily historical market data ingestion script
-│   └── collect_infrastructure_news.py # Headless browser alternative text extraction script
-├── data_samples/                   # Public data warehouse location for Phase 1 verification
-│   ├── ai_infrastructure_stock_data.csv # Output time-series data
-│   ├── all_found_news_debug.csv    # Debug dump of all scraped news
-│   └── raw_alternative_news_data.csv    # Filtered project-relevant news indicators
-├── requirements.txt                # Python package dependencies
-└── README.md                       # Core pipeline documentation
+├── scrapers/                           # Core collection engine scripts
+│   ├── AI_Stock.py                     # Historical market data ingestion
+│   ├── collect_infrastructure_news.py  # Multi-source news collector
+│   └── visualize_data.py               # Data visualization charts
+├── data_samples/                       # Output data warehouse
+│   ├── ai_infrastructure_stock_data.csv
+│   ├── ai_infrastructure_news.csv      # Filtered AI news dataset
+│   ├── all_news_raw.csv                # All scraped news (unfiltered)
+│   └── charts/                         # Generated visualization PNGs
+├── requirements.txt
+└── README.md
 ```
 
 ### 🚀 Installation & Local Environment Setup
 
-Ensure you have Python 3.10+ installed. This environment utilizes webdriver-manager to instantiate and manage headless binary components automatically.
+Ensure you have Python 3.10+ installed.
 
 #### 1. Clone the Workspace
 
@@ -89,25 +109,29 @@ pip install -r requirements.txt
 
 ### 🏃 Execution Manual
 
-### Ingest Stock Performance Indices
-
-To run the automated market acquisition loop and output to the unified CSV index, execute:
+#### Step 1: Ingest Stock Data
 
 ```bash
 python3 scrapers/AI_Stock.py
 ```
 
-### Ingest Grid & Cooling Alternative Indicators
-
-To spawn the automated scraping sequence, invoke the headless browser engine using:
+#### Step 2: Collect News from All Sources
 
 ```bash
 python3 scrapers/collect_infrastructure_news.py
 ```
 
+#### Step 3: Generate Visualizations
+
+```bash
+python3 scrapers/visualize_data.py
+```
+
+---
+
 ### 📊 Dataset Metadata & Features
 
-#### Financial Time Series Structure (`ai_infrastructure_stock_data.csv`)
+#### Financial Time Series (`ai_infrastructure_stock_data.csv`)
 
 | Feature | Data Type | Representation |
 | :--- | :--- | :--- |
@@ -116,19 +140,23 @@ python3 scrapers/collect_infrastructure_news.py
 | **Volume** | Int64 | Consolidated share volume traded during session |
 | **Company / Ticker** | String | Unique target asset identifiers |
 
-#### Alternative Text Data Structure (`raw_alternative_news_data.csv`)
+#### AI Infrastructure News (`ai_infrastructure_news.csv`)
 
 | Feature | Data Type | Representation |
 | :--- | :--- | :--- |
-| **date** | Timestamp | Date extracted or assigned at timestamp of scraper runtime |
-| **headline** | String | Raw text scraped from article structural header element |
-| **url** | String | Canonical URL path referencing source validation anchor |
+| **date** | Timestamp | Article publication date (YYYY-MM-DD) |
+| **headline** | String | Article headline text |
+| **summary** | String | Article summary/description |
+| **url** | String | Canonical article URL |
+| **source** | String | News source name |
+| **source_categories** | String | Source topic categories |
+| **tags** | String | Article tags from feed |
 
 ---
 
 ### 🔮 Downstream Pipeline Context (Phase 2 & Phase 3)
 
-The unstructured headlines gathered by this script provide the foundation for downstream data science tasks:
+The collected headlines and summaries provide the foundation for downstream data science tasks:
 
 * **Natural Language Processing (Phase 2):** Passing extracted text into transformer models (e.g., FinBERT) to turn news stories into quantitative numeric scalar indicators:
 

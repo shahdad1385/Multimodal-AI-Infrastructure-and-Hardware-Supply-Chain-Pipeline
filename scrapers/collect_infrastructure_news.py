@@ -1,119 +1,259 @@
 import os
-import time
+import re
+import hashlib
 from datetime import datetime
+from urllib.parse import urlparse
+
+import feedparser
 import pandas as pd
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
+import requests
+from bs4 import BeautifulSoup
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, '..', 'data_samples')
 
+# ---------------------------------------------------------------------------
+# Keyword matrix — articles must match at least one to be kept
+# ---------------------------------------------------------------------------
+TARGET_KEYWORDS = [
+    "ai", "artificial intelligence", "machine learning", "deep learning",
+    "nvidia", "amd", "intel", "tsmc", "semiconductor", "chip", "gpu", "tpu",
+    "data center", "datacenter", "cloud", "hyperscaler",
+    "cooling", "liquid cooling", "immersion",
+    "power", "grid", "electricity", "energy", "utility", "utilities",
+    "infrastructure", "server", "rack",
+    "supply chain", "foundry", "fab",
+]
 
-def run_advanced_news_scraper():
-    print("🚀 Initializing Selenium WebDriver for AI Infrastructure Data Extraction...")
+# ---------------------------------------------------------------------------
+# Source definitions — each entry knows how to fetch its own articles
+# ---------------------------------------------------------------------------
+SOURCES = [
+    {
+        "name": "TechCrunch AI",
+        "type": "rss",
+        "url": "https://techcrunch.com/category/artificial-intelligence/feed/",
+        "categories": ["artificial-intelligence", "tech"],
+    },
+    {
+        "name": "Semiconductor Engineering",
+        "type": "rss",
+        "url": "https://semiengineering.com/feed/",
+        "categories": ["semiconductor", "chips"],
+    },
+    {
+        "name": "The Register",
+        "type": "rss",
+        "url": "https://www.theregister.com/headlines.atom",
+        "categories": ["datacenter", "infrastructure"],
+        "filter_tags": ["data centre", "data center", "ai", "cloud", "semiconductor"],
+    },
+    {
+        "name": "Tom's Hardware",
+        "type": "rss",
+        "url": "https://www.tomshardware.com/feeds/all",
+        "categories": ["hardware", "semiconductor"],
+    },
+    {
+        "name": "SemiAnalysis",
+        "type": "rss",
+        "url": "https://semianalysis.com/feed/",
+        "categories": ["semiconductor", "analysis"],
+    },
+    {
+        "name": "DataCenterDynamics",
+        "type": "html",
+        "url": "https://www.datacenterdynamics.com/en/news/",
+        "categories": ["datacenter", "infrastructure"],
+    },
+]
 
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
 
-    driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()),
-        options=chrome_options
-    )
 
-    target_url = "https://www.datacenterdynamics.com/en/news/"
-    filtered_data = []
-    all_news_data = []
+# ---------------------------------------------------------------------------
+# Source-specific parsers
+# ---------------------------------------------------------------------------
+def _parse_date(raw):
+    """Best-effort date extraction from feed entry."""
+    if hasattr(raw, "published_parsed") and raw.published_parsed:
+        try:
+            return datetime(*raw.published_parsed[:6]).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    if hasattr(raw, "updated_parsed") and raw.updated_parsed:
+        try:
+            return datetime(*raw.updated_parsed[:6]).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    return datetime.today().strftime("%Y-%m-%d")
 
-    target_keywords = [
-        "cooling", "liquid", "immersion", "ai", "datacenter", "center", "nvidia",
-        "tsmc", "taiwan", "china", "semiconductor", "chip", "gpus", "gpu",
-        "power", "plant", "electricity", "energy", "grid", "utilities", "infrastructure"
-    ]
 
+def _clean(text):
+    if not text:
+        return ""
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _headline_id(headline, url):
+    key = f"{headline.lower().strip()}|{url}"
+    return hashlib.md5(key.encode()).hexdigest()
+
+
+def fetch_rss(source):
+    """Parse an RSS/Atom feed and return normalised article dicts."""
+    feed = feedparser.parse(source["url"])
+    articles = []
+    for entry in feed.entries:
+        title = _clean(getattr(entry, "title", ""))
+        link = getattr(entry, "link", "")
+        summary = _clean(getattr(entry, "summary", getattr(entry, "description", "")))
+        date = _parse_date(entry)
+        tags = [t.get("term", "") for t in getattr(entry, "tags", [])]
+
+        if not title or len(title) < 10 or not link:
+            continue
+
+        articles.append({
+            "date": date,
+            "headline": title,
+            "summary": summary[:500],
+            "url": link,
+            "source": source["name"],
+            "source_categories": ",".join(source["categories"]),
+            "tags": ",".join(tags),
+        })
+    return articles
+
+
+def fetch_html(source):
+    """Scrape a static HTML listing page for article links + headlines."""
+    articles = []
     try:
-        print(f"🔎 Navigating to target portal: {target_url}")
-        driver.get(target_url)
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.TAG_NAME, "a"))
-        )
+        resp = requests.get(source["url"], headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
 
-        print("📥 Executing dynamic scroll requests to load archival dataset history...")
-        for _ in range(2):
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(3)
+        seen = set()
+        for a_tag in soup.find_all("a", href=True):
+            href = a_tag["href"]
+            text = _clean(a_tag.get_text())
 
-        print("📊 Extracting text and payload links from DOM anchor elements...")
-        articles = driver.find_elements(By.TAG_NAME, "a")
-        print(f"🔎 Total raw anchor links intercepted in memory: {len(articles)}")
+            if not text or len(text) < 20:
+                continue
+            if not href.startswith("http"):
+                href = source["url"].rstrip("/") + "/" + href.lstrip("/")
 
-        for idx, article in enumerate(articles):
-            try:
-                title_text = article.text
-                link_url = article.get_attribute("href")
-
-                if not title_text or len(title_text.strip()) < 15 or not link_url:
-                    continue
-
-                title_clean = title_text.strip().replace('\n', ' ')
-                title_lower = title_clean.lower()
-
-                item = {
-                    "date": datetime.today().strftime('%Y-%m-%d'),
-                    "headline": title_clean,
-                    "url": link_url
-                }
-
-                all_news_data.append(item)
-
-                match_found = any(keyword in title_lower for keyword in target_keywords)
-                if match_found:
-                    filtered_data.append(item)
-                    print(f"✅ [MATCH FOUND - Element {idx}]: {title_clean[:60]}...")
-
-            except Exception:
+            parsed = urlparse(href)
+            if "datacenterdynamics.com" not in parsed.netloc:
                 continue
 
+            path = parsed.path
+            if not any(path.startswith(f"/en/{s}/") for s in ("news", "features", "analysis")):
+                continue
+
+            slug = path.rstrip("/").split("/")[-1]
+            if len(slug) < 10 or slug.startswith("?"):
+                continue
+
+            skip_words = ("channel", "channels", "category", "tag", "author", "page")
+            if any(w in slug.lower() for w in skip_words):
+                continue
+
+            if href in seen:
+                continue
+            seen.add(href)
+
+            articles.append({
+                "date": datetime.today().strftime("%Y-%m-%d"),
+                "headline": text,
+                "summary": "",
+                "url": href,
+                "source": source["name"],
+                "source_categories": ",".join(source["categories"]),
+                "tags": "",
+            })
     except Exception as e:
-        print(f"❌ Critical breakdown in core scraper thread architecture: {e}")
-    finally:
-        print("🔒 Terminating browser socket connection securely...")
-        driver.quit()
+        print(f"  ⚠ Failed to scrape {source['name']}: {e}")
+    return articles
 
-    print("\n💾 Commencing CSV output write sequence...")
 
-    if all_news_data:
-        df_all = pd.DataFrame(all_news_data)
-        df_all.drop_duplicates(subset=["headline"], inplace=True)
-        df_all = df_all[df_all['url'].str.contains('/news/|/features/|/analysis/', case=False, na=False)]
+FETCHERS = {
+    "rss": fetch_rss,
+    "html": fetch_html,
+}
 
-        debug_path = os.path.join(OUTPUT_DIR, "all_found_news_debug.csv")
-        df_all.to_csv(debug_path, index=False, encoding="utf-8-sig")
-        print(f"📁 Debug dump file compiled successfully at: {os.path.abspath(debug_path)} (Records: {len(df_all)})")
-    else:
-        print("❌ Data payload processing aborted. No textual elements parsed. Verify proxy or network socket availability.")
 
-    if filtered_data:
-        df_filtered = pd.DataFrame(filtered_data)
-        df_filtered.drop_duplicates(subset=["headline"], inplace=True)
-        df_filtered = df_filtered[df_filtered['url'].str.contains('/news/|/features/|/analysis/', case=False, na=False)]
+# ---------------------------------------------------------------------------
+# Filtering and deduplication
+# ---------------------------------------------------------------------------
+def matches_keywords(article, keywords):
+    text = f"{article['headline']} {article['summary']} {article['tags']}".lower()
+    return any(kw in text for kw in keywords)
 
-        if not df_filtered.empty:
-            filtered_path = os.path.join(OUTPUT_DIR, "raw_alternative_news_data.csv")
-            df_filtered.to_csv(filtered_path, index=False, encoding="utf-8-sig")
-            print(f"✨ Target project dataset generated successfully at: {os.path.abspath(filtered_path)} (Records: {len(df_filtered)})")
-        else:
-            print("⚠️ Extracted elements did not match the required canonical news URL pathways.")
-    else:
-        print("⚠️ Pipeline complete, but no headlines intersected with current thematic keyword matrix array.")
+
+def deduplicate(articles):
+    seen = set()
+    unique = []
+    for a in articles:
+        hid = _headline_id(a["headline"], a["url"])
+        if hid not in seen:
+            seen.add(hid)
+            unique.append(a)
+    return unique
+
+
+# ---------------------------------------------------------------------------
+# Main pipeline
+# ---------------------------------------------------------------------------
+def collect_all():
+    print("🚀 Multi-Source AI Infrastructure News Collector\n")
+    all_articles = []
+
+    for source in SOURCES:
+        print(f"📡 Fetching from {source['name']} ({source['type']})...")
+        fetcher = FETCHERS[source["type"]]
+        articles = fetcher(source)
+        print(f"   → {len(articles)} raw articles")
+        all_articles.extend(articles)
+
+    print(f"\n📊 Total raw articles collected: {len(all_articles)}")
+
+    # Deduplicate across sources
+    all_articles = deduplicate(all_articles)
+    print(f"📊 After deduplication: {len(all_articles)}")
+
+    df_all = pd.DataFrame(all_articles)
+
+    # Keyword filtering
+    mask = df_all.apply(lambda row: matches_keywords(row, TARGET_KEYWORDS), axis=1)
+    df_filtered = df_all[mask].copy()
+    print(f"📊 After keyword filtering: {len(df_filtered)}")
+
+    # Sort by date descending
+    df_all.sort_values("date", ascending=False, inplace=True)
+    df_filtered.sort_values("date", ascending=False, inplace=True)
+    df_all.reset_index(drop=True, inplace=True)
+    df_filtered.reset_index(drop=True, inplace=True)
+
+    # Save outputs
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    all_path = os.path.join(OUTPUT_DIR, "all_news_raw.csv")
+    df_all.to_csv(all_path, index=False, encoding="utf-8-sig")
+    print(f"\n📁 Raw dataset saved: {all_path} ({len(df_all)} rows)")
+
+    filtered_path = os.path.join(OUTPUT_DIR, "ai_infrastructure_news.csv")
+    df_filtered.to_csv(filtered_path, index=False, encoding="utf-8-sig")
+    print(f"📁 Filtered dataset saved: {filtered_path} ({len(df_filtered)} rows)")
+
+    return df_all, df_filtered
+
 
 if __name__ == "__main__":
-    run_advanced_news_scraper()
+    collect_all()
