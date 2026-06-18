@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import hashlib
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs, unquote, quote_plus
@@ -75,6 +76,36 @@ SOURCES = [
             "reuters ai infrastructure power grid energy",
         ],
         "categories": ["reuters", "finance", "technology"],
+    },
+    {
+        "name": "Reddit r/wallstreetbets",
+        "type": "reddit_rss",
+        "url": "https://www.reddit.com/r/wallstreetbets/.rss",
+        "categories": ["reddit", "market-sentiment"],
+    },
+    {
+        "name": "Reddit r/nvidia",
+        "type": "reddit_rss",
+        "url": "https://www.reddit.com/r/nvidia/.rss",
+        "categories": ["reddit", "nvidia", "gpu"],
+    },
+    {
+        "name": "Reddit r/semiconductors",
+        "type": "reddit_rss",
+        "url": "https://www.reddit.com/r/semiconductors/.rss",
+        "categories": ["reddit", "semiconductor"],
+    },
+    {
+        "name": "Reddit r/hardware",
+        "type": "reddit_rss",
+        "url": "https://www.reddit.com/r/hardware/.rss",
+        "categories": ["reddit", "hardware"],
+    },
+    {
+        "name": "Reddit r/technology",
+        "type": "reddit_rss",
+        "url": "https://www.reddit.com/r/technology/.rss",
+        "categories": ["reddit", "technology"],
     },
 ]
 
@@ -247,10 +278,39 @@ def fetch_google_news_rss(source):
     return articles
 
 
+def fetch_reddit_rss(source):
+    """Fetch posts from a subreddit via RSS feed."""
+    articles = []
+    try:
+        feed = feedparser.parse(source["url"])
+        for entry in feed.entries:
+            title = _clean(getattr(entry, "title", ""))
+            link = getattr(entry, "link", "")
+            summary = _clean(getattr(entry, "summary", getattr(entry, "description", "")))
+            date = _parse_date(entry)
+
+            if not title or len(title) < 10 or not link:
+                continue
+
+            articles.append({
+                "date": date,
+                "headline": title,
+                "summary": summary[:500],
+                "url": link,
+                "source": source["name"],
+                "source_categories": ",".join(source["categories"]),
+                "tags": "",
+            })
+    except Exception as e:
+        print(f"  ⚠ Failed to fetch {source['name']}: {e}")
+    return articles
+
+
 FETCHERS = {
     "rss": fetch_rss,
     "html": fetch_html,
     "google_news_rss": fetch_google_news_rss,
+    "reddit_rss": fetch_reddit_rss,
 }
 
 
@@ -286,6 +346,8 @@ def collect_all():
         articles = fetcher(source)
         print(f"   → {len(articles)} raw articles")
         all_articles.extend(articles)
+        if source["type"] == "reddit_rss":
+            time.sleep(4)
 
     print(f"\n📊 Total raw articles collected: {len(all_articles)}")
 

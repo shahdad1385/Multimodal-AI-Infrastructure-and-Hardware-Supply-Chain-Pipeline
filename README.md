@@ -11,156 +11,123 @@ The core objective is to map lag-correlations between physical constraints—suc
 ### 🛠️ System Architecture & Data Flow
 
 ```text
-                   ┌───────────────────────────────┐
-                   │    Target Infrastructure      │
-                   └───────────────┬───────────────┘
-                                   │
-          ┌────────────────────────┴────────────────────────┐
-          ▼                                                 ▼
-┌─────────────────────────────────┐   ┌─────────────────────────────────┐
-│       Yahoo Finance Web API     │   │   Multi-Source News Collector   │
-├─────────────────────────────────┤   ├─────────────────────────────────┤
-│ • yfinance Library Ingestion    │   │ • TechCrunch AI (RSS)          │
-│ • Maximum Time Horizon (2018+)  │   │ • Semiconductor Engineering    │
-│ • Standardized Numerical CSV    │   │ • The Register (Atom feed)     │
-└─────────────────────────────────┘   │ • Tom's Hardware (RSS)         │
-                                      │ • SemiAnalysis (RSS)           │
-                                      │ • DataCenterDynamics (HTML)    │
-                                      │ • Keyword Matrix Filtering     │
-                                      │ • Cross-source Deduplication   │
-                                      └─────────────────────────────────┘
-                         \                           /
-                          \─────────────┬───────────/
-                                        ▼
-                           ┌─────────────────────────────┐
-                           │    /data_samples Output     │
-                           ├─────────────────────────────┤
-                           │  • Market Time Series Data  │
-                           │  • Filtered AI News Dataset │
-                           │  • Raw All-News Dataset     │
-                           │  • Visualization Charts     │
-                           └─────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│                     Data Collection Pipeline                       │
+├──────────────────────┬──────────────────────┬──────────────────────┤
+│   Stock Data         │   News Sources       │   Market Context     │
+│   (yfinance)         │   (RSS + HTML + API) │   (yfinance)         │
+├──────────────────────┼──────────────────────┼──────────────────────┤
+│ • 7 AI/semi stocks   │ • Reuters (200+)     │ • VIX volatility     │
+│ • 2018–2026 daily    │ • TechCrunch (20)    │ • Treasury yields    │
+│ • OHLCV format       │ • SemiEngineering    │ • SMH/XLK ETFs      │
+│                      │ • The Register       │ • Bitcoin            │
+│                      │ • Tom's Hardware     │ • USD Index          │
+│                      │ • Reddit (5 subs)    │                      │
+│                      │ • HuggingFace (6.8K) │                      │
+├──────────────────────┴──────────────────────┴──────────────────────┤
+│                          Output: /data_samples                     │
+│  • ai_infrastructure_stock_data.csv  (14,630 rows)                 │
+│  • ai_infrastructure_news.csv        (390 filtered)                │
+│  • hf_financial_news.csv             (6,798 from HuggingFace)      │
+│  • market_indicators.csv             (17,966 rows)                 │
+│  • all_news_raw.csv                  (462 unfiltered)              │
+│  • charts/                           (5 visualization PNGs)        │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
-### 1. Financial Ingestion Pipeline (`scrapers/AI_Stock.py`)
+### 📂 Scripts Overview
 
-Scope: Captures full-depth, historical trading indicators (Open, High, Low, Close, Volume) since 2018-01-01.
-
-**Target Ledger:**
-* **Semiconductor Layer:** TSMC (`TSM`)
-* **Compute/AI Layer:** NVIDIA (`NVDA`), META (`META`), Alphabet (`GOOGL`)
-* **Cooling & Rack Infrastructure:** Vertiv (`VRT`), Modine Manufacturing (`MOD`), Super Micro Computer (`SMCI`)
-
-### 2. Multi-Source News Collector (`scrapers/collect_infrastructure_news.py`)
-
-Scope: Collects AI infrastructure and semiconductor news from 6 sources using RSS feeds and HTML scraping.
-
-**News Sources:**
-
-| Source | Method | Focus Area |
+| Script | Purpose | Output |
 |---|---|---|
-| Reuters | Google News RSS | Technology, AI, semiconductor finance |
-| TechCrunch AI | RSS | Artificial intelligence, tech |
-| Semiconductor Engineering | RSS | Semiconductor, chips |
-| The Register | Atom RSS | Data center, infrastructure |
-| Tom's Hardware | RSS | Hardware, semiconductor |
-| SemiAnalysis | RSS | Semiconductor analysis |
-| DataCenterDynamics | HTML scraping | Data center infrastructure |
+| `scrapers/AI_Stock.py` | Fetch historical stock data (7 tickers) | `ai_infrastructure_stock_data.csv` |
+| `scrapers/collect_infrastructure_news.py` | Multi-source news + Reddit | `ai_infrastructure_news.csv`, `all_news_raw.csv` |
+| `scrapers/download_datasets.py` | Download HuggingFace financial news | `hf_financial_news.csv` |
+| `scrapers/market_indicators.py` | Fetch VIX, Treasuries, ETFs, BTC | `market_indicators.csv` |
+| `scrapers/visualize_data.py` | Generate charts from all data | `charts/*.png` |
 
-**Keyword Filtering:** Articles are filtered against a matrix of AI infrastructure terms including: `ai`, `semiconductor`, `nvidia`, `tsmc`, `data center`, `cooling`, `power`, `grid`, `gpu`, and more.
-
-### 3. Data Visualization (`scrapers/visualize_data.py`)
-
-Scope: Generates publication frequency, source distribution, keyword frequency, timeline, and headline length charts from collected data.
-
----
-
-### 📂 Repository Structure
-
-```text
-├── scrapers/                           # Core collection engine scripts
-│   ├── AI_Stock.py                     # Historical market data ingestion
-│   ├── collect_infrastructure_news.py  # Multi-source news collector
-│   └── visualize_data.py               # Data visualization charts
-├── data_samples/                       # Output data warehouse
-│   ├── ai_infrastructure_stock_data.csv
-│   ├── ai_infrastructure_news.csv      # Filtered AI news dataset
-│   ├── all_news_raw.csv                # All scraped news (unfiltered)
-│   └── charts/                         # Generated visualization PNGs
-├── requirements.txt
-└── README.md
-```
-
-### 🚀 Installation & Local Environment Setup
-
-Ensure you have Python 3.10+ installed.
-
-#### 1. Clone the Workspace
+### 🚀 Execution Manual
 
 ```bash
-git clone [https://github.com/your-username/your-repo-name.git](https://github.com/your-username/your-repo-name.git)
-cd your-repo-name
-```
-
-#### 2. Install Package Dependencies
-
-```bash
+# Step 1: Install dependencies
 pip install -r requirements.txt
-```
 
-### 🏃 Execution Manual
-
-#### Step 1: Ingest Stock Data
-
-```bash
+# Step 2: Fetch stock data
 python3 scrapers/AI_Stock.py
-```
 
-#### Step 2: Collect News from All Sources
+# Step 3: Fetch market indicators
+python3 scrapers/market_indicators.py
 
-```bash
+# Step 4: Collect news from all sources (RSS + Reddit)
 python3 scrapers/collect_infrastructure_news.py
-```
 
-#### Step 3: Generate Visualizations
+# Step 5: Download HuggingFace financial news dataset
+python3 scrapers/download_datasets.py
 
-```bash
+# Step 6: Generate visualizations
 python3 scrapers/visualize_data.py
 ```
 
----
+### 📊 Datasets
 
-### 📊 Dataset Metadata & Features
+#### Stock Data (`ai_infrastructure_stock_data.csv`)
 
-#### Financial Time Series (`ai_infrastructure_stock_data.csv`)
+| Feature | Type | Description |
+|---|---|---|
+| Date | Timestamp | Trading date (YYYY-MM-DD) |
+| Open/High/Low/Close | Float | Price data |
+| Volume | Int | Shares traded |
+| Company/Ticker | String | Company identifier |
 
-| Feature | Data Type | Representation |
-| :--- | :--- | :--- |
-| **Date** | Timestamp | Time-zone naive date marker (YYYY-MM-DD) |
-| **Open / Close** | Float64 | Dollar denomination trading values |
-| **Volume** | Int64 | Consolidated share volume traded during session |
-| **Company / Ticker** | String | Unique target asset identifiers |
+**Tickers:** NVDA, META, GOOGL, TSM, VRT, MOD, SMCI
 
-#### AI Infrastructure News (`ai_infrastructure_news.csv`)
+#### Live News (`ai_infrastructure_news.csv`)
 
-| Feature | Data Type | Representation |
-| :--- | :--- | :--- |
-| **date** | Timestamp | Article publication date (YYYY-MM-DD) |
-| **headline** | String | Article headline text |
-| **summary** | String | Article summary/description |
-| **url** | String | Canonical article URL |
-| **source** | String | News source name |
-| **source_categories** | String | Source topic categories |
-| **tags** | String | Article tags from feed |
+Collected from 12 sources via RSS, HTML scraping, and Google News RSS.
+
+| Source | Method | Articles |
+|---|---|---|
+| Reuters | Google News RSS | ~200 |
+| Reddit r/wallstreetbets | RSS | ~23 |
+| Tom's Hardware | RSS | ~38 |
+| The Register | Atom RSS | ~30 |
+| DataCenterDynamics | HTML | ~21 |
+| TechCrunch AI | RSS | ~20 |
+| + 5 more Reddit subs | RSS | varies |
+
+#### HuggingFace News (`hf_financial_news.csv`)
+
+Historical financial news from ashraq/financial-news (2018–2020).
+
+| Feature | Type | Description |
+|---|---|---|
+| date | Timestamp | Publication date |
+| headline | String | Article headline |
+| source | String | Publisher name |
+| ticker | String | Stock ticker symbol |
+| url | String | Article URL |
+
+**Coverage:** 6,798 articles across 13 semiconductor/AI tickers.
+
+#### Market Indicators (`market_indicators.csv`)
+
+| Indicator | Ticker | Rows | Purpose |
+|---|---|---|---|
+| VIX | ^VIX | 2,127 | Market volatility |
+| 10Y Treasury | ^TNX | 2,123 | Interest rates |
+| 5Y Treasury | ^FVX | 2,123 | Interest rates |
+| 30Y Treasury | ^TYX | 2,123 | Interest rates |
+| Semiconductor ETF | SMH | 2,126 | Sector benchmark |
+| Tech ETF | XLK | 2,126 | Tech sentiment |
+| Bitcoin | BTC-USD | 3,090 | Risk sentiment |
+| US Dollar Index | DX-Y.NYB | 2,128 | Currency strength |
 
 ---
 
 ### 🔮 Downstream Pipeline Context (Phase 2 & Phase 3)
 
-The collected headlines and summaries provide the foundation for downstream data science tasks:
+The collected data provides the foundation for:
 
-* **Natural Language Processing (Phase 2):** Passing extracted text into transformer models (e.g., FinBERT) to turn news stories into quantitative numeric scalar indicators:
-
-$$\text{Sentiment Score} = P(\text{Positive}) - P(\text{Negative})$$
-
-* **Feature Alignment:** Aggregating alternative scores daily and evaluating predictive lead-lag characteristics against hardware market cap metrics.
+* **Sentiment Analysis (Phase 2):** FinBERT on news headlines → quantitative sentiment scores
+* **Feature Engineering:** Lag features, rolling averages, keyword frequencies
+* **Correlation Analysis:** News sentiment vs stock price movements
+* **Predictive Modeling (Phase 3):** Time-series forecasting with sentiment + market indicators
