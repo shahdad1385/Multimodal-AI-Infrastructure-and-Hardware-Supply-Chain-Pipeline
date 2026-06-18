@@ -59,6 +59,7 @@ Scope: Collects AI infrastructure and semiconductor news from 6 sources using RS
 
 | Source | Method | Focus Area |
 |---|---|---|
+| Reuters | Google News RSS | Technology, AI, semiconductor finance |
 | TechCrunch AI | RSS | Artificial intelligence, tech |
 | Semiconductor Engineering | RSS | Semiconductor, chips |
 | The Register | Atom RSS | Data center, infrastructure |

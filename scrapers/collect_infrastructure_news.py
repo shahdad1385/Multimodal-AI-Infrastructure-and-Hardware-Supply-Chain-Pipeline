@@ -2,7 +2,7 @@ import os
 import re
 import hashlib
 from datetime import datetime
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs, unquote, quote_plus
 
 import feedparser
 import pandas as pd
@@ -65,6 +65,16 @@ SOURCES = [
         "type": "html",
         "url": "https://www.datacenterdynamics.com/en/news/",
         "categories": ["datacenter", "infrastructure"],
+    },
+    {
+        "name": "Reuters",
+        "type": "google_news_rss",
+        "queries": [
+            "reuters artificial intelligence data center",
+            "reuters nvidia tsmc semiconductor chip",
+            "reuters ai infrastructure power grid energy",
+        ],
+        "categories": ["reuters", "finance", "technology"],
     },
 ]
 
@@ -183,9 +193,64 @@ def fetch_html(source):
     return articles
 
 
+def _resolve_google_news_url(google_url):
+    """Extract the actual article URL from a Google News redirect link."""
+    parsed = urlparse(google_url)
+    if "news.google.com" not in parsed.netloc:
+        return google_url
+    qs = parse_qs(parsed.query)
+    if "url" in qs:
+        return unquote(qs["url"][0])
+    return google_url
+
+
+def fetch_google_news_rss(source):
+    """Fetch articles via Google News RSS, filtered to a specific publisher."""
+    articles = []
+    seen_urls = set()
+
+    for query in source["queries"]:
+        rss_url = (
+            f"https://news.google.com/rss/search?q={quote_plus(query)}"
+            f"&hl=en-US&gl=US&ceid=US:en"
+        )
+        feed = feedparser.parse(rss_url)
+
+        for entry in feed.entries:
+            publisher = getattr(entry, "source", {})
+            publisher_name = publisher.get("title", "") if isinstance(publisher, dict) else ""
+
+            title = _clean(getattr(entry, "title", ""))
+
+            raw_link = getattr(entry, "link", "")
+            link = _resolve_google_news_url(raw_link)
+
+            if not title or len(title) < 10 or not link:
+                continue
+            if link in seen_urls:
+                continue
+            seen_urls.add(link)
+
+            summary = _clean(getattr(entry, "summary", getattr(entry, "description", "")))
+            date = _parse_date(entry)
+
+            articles.append({
+                "date": date,
+                "headline": title,
+                "summary": summary[:500],
+                "url": link,
+                "source": publisher_name if publisher_name else source["name"],
+                "source_categories": ",".join(source["categories"]),
+                "tags": "",
+            })
+
+    return articles
+
+
 FETCHERS = {
     "rss": fetch_rss,
     "html": fetch_html,
+    "google_news_rss": fetch_google_news_rss,
 }
 
 
