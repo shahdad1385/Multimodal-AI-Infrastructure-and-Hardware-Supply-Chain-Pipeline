@@ -39,6 +39,18 @@ def add_stock_features():
         ("is_weekend", "INTEGER"), ("is_month_start", "INTEGER"),
         ("is_month_end", "INTEGER"), ("is_quarter_end", "INTEGER"),
         ("day_name", "TEXT"), ("month_name", "TEXT"), ("week_number", "INTEGER"),
+        ("is_holiday", "INTEGER"),
+        ("day_name_monday", "INTEGER"), ("day_name_tuesday", "INTEGER"),
+        ("day_name_wednesday", "INTEGER"), ("day_name_thursday", "INTEGER"),
+        ("day_name_friday", "INTEGER"), ("day_name_saturday", "INTEGER"), ("day_name_sunday", "INTEGER"),
+        ("month_name_january", "INTEGER"), ("month_name_february", "INTEGER"),
+        ("month_name_march", "INTEGER"), ("month_name_april", "INTEGER"),
+        ("month_name_may", "INTEGER"), ("month_name_june", "INTEGER"),
+        ("month_name_july", "INTEGER"), ("month_name_august", "INTEGER"),
+        ("month_name_september", "INTEGER"), ("month_name_october", "INTEGER"),
+        ("month_name_november", "INTEGER"), ("month_name_december", "INTEGER"),
+        ("quarter_1", "INTEGER"), ("quarter_2", "INTEGER"),
+        ("quarter_3", "INTEGER"), ("quarter_4", "INTEGER"),
     ]
     add_columns_if_missing("stock_prices", features)
 
@@ -72,6 +84,11 @@ def add_stock_features():
     updates["close_open_ratio"] = df["close"] / (df["open"] + 1e-8)
 
     d = df["date"]
+    day_names = {0: 'Monday', 1: 'Tuesday', 2: 'Wednesday', 3: 'Thursday', 4: 'Friday'}
+    month_names = {1: 'January', 2: 'February', 3: 'March', 4: 'April',
+                   5: 'May', 6: 'June', 7: 'July', 8: 'August',
+                   9: 'September', 10: 'October', 11: 'November', 12: 'December'}
+
     updates["year"] = d.dt.year
     updates["quarter"] = d.dt.quarter
     updates["month"] = d.dt.month
@@ -81,15 +98,22 @@ def add_stock_features():
     updates["is_month_start"] = d.dt.is_month_start.astype(int)
     updates["is_month_end"] = d.dt.is_month_end.astype(int)
     updates["is_quarter_end"] = d.dt.is_quarter_end.astype(int)
-    day_names = {0: 'Monday', 1: 'Tuesday', 2: 'Wednesday', 3: 'Thursday',
-                  4: 'Friday', 5: 'Saturday', 6: 'Sunday'}
-    month_names = {1: 'January', 2: 'February', 3: 'March', 4: 'April',
-                   5: 'May', 6: 'June', 7: 'July', 8: 'August',
-                   9: 'September', 10: 'October', 11: 'November', 12: 'December'}
-
     updates["day_name"] = d.dt.dayofweek.map(day_names)
     updates["month_name"] = d.dt.month.map(month_names)
     updates["week_number"] = d.dt.isocalendar().week.astype(int)
+
+    from sklearn.preprocessing import OneHotEncoder as OHE
+    cat_df = pd.DataFrame({"day_name": updates["day_name"], "month_name": updates["month_name"],
+                            "quarter": df["date"].dt.quarter if "date" in df.columns else d.dt.quarter})
+    enc = OHE(sparse_output=False, handle_unknown="ignore")
+    enc.fit(cat_df.fillna("unknown"))
+    encoded = enc.transform(cat_df.fillna("unknown"))
+    for i, col in enumerate(enc.get_feature_names_out()):
+        updates[col.replace(" ", "_").lower()] = encoded[:, i].astype(int)
+
+    import holidays as hol
+    us_holidays = hol.US(years=range(2018, 2027))
+    updates["is_holiday"] = df["date"].apply(lambda x: 1 if pd.to_datetime(x).date() in us_holidays else 0) if "date" in df.columns else 0
 
     updates = updates.where(pd.notnull(updates), None)
 
