@@ -1,0 +1,21 @@
+id,ticker,name,sector
+1,NVDA,NVIDIA,Semiconductor / AI Compute
+2,META,Meta Platforms,Social Media / AI
+3,GOOGL,Alphabet (Google),Technology / AI
+4,TSM,Taiwan Semiconductor,Semiconductor Foundry
+5,VRT,Vertiv Holdings,Data Center Infrastructure
+6,MOD,Modine Manufacturing,Cooling Systems
+7,SMCI,Super Micro Computer,Server / AI Hardware
+8,AMD,Advanced Micro Devices,Semiconductor
+9,INTC,Intel Corporation,Semiconductor
+10,AVGO,Broadcom,Semiconductor / Networking
+11,QCOM,Qualcomm,Semiconductor
+12,MRVL,Marvell Technology,Semiconductor
+13,AMAT,Applied Materials,Semiconductor Equipment
+14,MU,Micron Technology,Memory Semiconductor
+15,LRCX,Lam Research,Semiconductor Equipment
+16,KLAC,KLA Corporation,Semiconductor Equipment
+17,ASML,ASML Holding,Semiconductor Equipment
+18,ARM,ARM Holdings,Semiconductor Design
+19,NXPI,NXP Semiconductors,Semiconductor
+20,ON,ON Semiconductor,Semiconductor
