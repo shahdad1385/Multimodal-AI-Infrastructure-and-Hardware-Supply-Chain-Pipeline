@@ -131,3 +131,62 @@ The collected data provides the foundation for:
 * **Feature Engineering:** Lag features, rolling averages, keyword frequencies
 * **Correlation Analysis:** News sentiment vs stock price movements
 * **Predictive Modeling (Phase 3):** Time-series forecasting with sentiment + market indicators
+
+---
+
+## Phase 2: Data Pipeline
+
+### Project Structure
+
+```
+CAF/
+├── pipeline.py                    # Main pipeline orchestrator
+├── requirements.txt               # Python dependencies
+├── data_samples/
+│   ├── caf_database.db            # SQLite database
+│   ├── train_stock_prices.csv     # Train split
+│   └── test_stock_prices.csv      # Test split
+├── scripts/
+│   ├── database_connection.py     # DB connection helper
+│   ├── load_data.py               # CSV → DB ingestion
+│   ├── feature_engineering.py     # Feature computation (writes to DB)
+│   ├── preprocess.py              # Split, null handling, normalization
+│   ├── one_hot_encode.py          # OHE encoding
+│   └── preprocess.py              # Preprocessing pipeline
+└── scrapers/                      # Data collection scripts
+```
+
+### How to Run the Pipeline
+
+```bash
+# Step 1: Install dependencies
+pip install -r requirements.txt
+
+# Step 2: Run the full pipeline
+python pipeline.py
+```
+
+The pipeline executes in this order:
+
+| Step | Script | Description |
+|---|---|---|
+| 1 | `scripts/load_data.py` | Creates SQLite DB, loads raw CSVs into tables |
+| 2 | `scripts/feature_engineering.py` | Computes technical indicators, calendar features, cyclical encoding, OHE — writes back to DB |
+| 3 | `scripts/preprocess.py` | Temporal train/test split (85/15), null handling via Linear Regression, RobustScaler + StandardScaler normalization |
+
+### Database Tables
+
+| Table | Rows | Description |
+|---|---|---|
+| `stock_prices` | 14,630 | Daily OHLCV + 70 engineered features |
+| `market_indicators` | 17,966 | VIX, Treasuries, ETFs, Bitcoin, USD Index |
+| `news_articles` | 390 | Industry news headlines + TF-IDF features |
+| `hf_news` | 6,798 | HuggingFace financial news (2018-2020) |
+| `companies` | 20 | Ticker → company name → sector mapping |
+
+### Preprocessing Details
+
+- **Temporal Split**: 85% train / 15% test, split by date cutoff (no random shuffling)
+- **Null Handling**: Linear Regression trained on train set using all available features; interpolation as fallback
+- **Normalization**: RobustScaler for price/volume/volatility; StandardScaler for returns/ratios — all fit on train only
+- **No Data Leakage**: All statistics computed from train data only

@@ -54,6 +54,10 @@ def fill_nulls_with_lr(train_df, test_df, col, predictor_cols, model):
 
 
 def handle_nulls(train_df, test_df, numeric_cols, group_col=None):
+    for col in numeric_cols:
+        train_df[col] = train_df[col].replace([np.inf, -np.inf], np.nan)
+        test_df[col] = test_df[col].replace([np.inf, -np.inf], np.nan)
+
     null_cols = [c for c in numeric_cols if train_df[c].isnull().any()]
 
     if not null_cols:
@@ -144,18 +148,20 @@ def normalize_features(train_df, test_df, numeric_cols):
     standard_cols = [c for c in standard_cols if c in train_df.columns]
 
     applied = []
-    if robust_cols:
+    if robust_cols and len(train_df) > 0:
         robust_scaler = RobustScaler()
         robust_scaler.fit(train_df[robust_cols])
         train_df[robust_cols] = robust_scaler.transform(train_df[robust_cols])
-        test_df[robust_cols] = robust_scaler.transform(test_df[robust_cols])
+        if len(test_df) > 0:
+            test_df[robust_cols] = robust_scaler.transform(test_df[robust_cols])
         applied.append(f"RobustScaler: {', '.join(robust_cols)}")
 
-    if standard_cols:
+    if standard_cols and len(train_df) > 0:
         standard_scaler = StandardScaler()
         standard_scaler.fit(train_df[standard_cols])
         train_df[standard_cols] = standard_scaler.transform(train_df[standard_cols])
-        test_df[standard_cols] = standard_scaler.transform(test_df[standard_cols])
+        if len(test_df) > 0:
+            test_df[standard_cols] = standard_scaler.transform(test_df[standard_cols])
         applied.append(f"StandardScaler: {', '.join(standard_cols)}")
 
     for line in applied:
