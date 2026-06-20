@@ -2,27 +2,109 @@ import os
 import sys
 import pandas as pd
 import numpy as np
+from sqlalchemy import text
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from database_connection import get_engine
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CLEANED_DIR = os.path.join(BASE_DIR, "data_samples", "cleaned")
-OUTPUT_DIR = os.path.join(BASE_DIR, "data_samples")
+engine = get_engine()
+BATCH_SIZE = 1000
 
 
 # ---------------------------------------------------------------------------
-# Stock price features (per ticker)
+# Utility: add columns to a table if they don't already exist
 # ---------------------------------------------------------------------------
-def engineer_stock_features(df):
-    print("  Building stock price features...")
+def add_columns_if_missing(table, columns):
+    with engine.connect() as conn:
+        existing = {row[1] for row in conn.execute(text(f"PRAGMA table_info({table})")).fetchall()}
+        for col_name, col_type in columns:
+            if col_name not in existing:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}"))
+                print(f"    + {col_name} ({col_type})")
+        conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Utility: batch UPDATE rows by id
+# ---------------------------------------------------------------------------
+def batch_update(table, df, id_col="id", columns=None):
+    if columns is None:
+        cols = [c for c in df.columns if c != id_col]
+    else:
+        cols = list(columns)
+
+    with engine.connect() as conn:
+        for start in range(0, len(df), BATCH_SIZE):
+            chunk = df.iloc[start:start + BATCH_SIZE]
+            for _, row in chunk.iterrows():
+                sets = []
+                vals = {id_col: int(row[id_col])}
+                for c in cols:
+                    v = row[c]
+                    if pd.isna(v):
+                        continue
+                    sets.append(f"{c} = :{c}")
+                    vals[c] = float(v) if isinstance(v, (np.floating, float)) else int(v) if isinstance(v, (np.integer, int)) else v
+                if sets:
+                    conn.execute(text(f"UPDATE {table} SET {', '.join(sets)} WHERE {id_col} = :{id_col}"), vals)
+        conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Stock price features (per ticker) + calendar + OHE + holidays
+# ---------------------------------------------------------------------------
+def add_stock_features():
+    print("📈 Adding features to stock_prices...")
+
+    features = [
+        ("daily_return", "REAL"), ("log_return", "REAL"),
+        ("price_range", "REAL"), ("gap", "REAL"),
+        ("volume_change", "REAL"), ("volume_ma_7", "REAL"), ("volume_ratio", "REAL"),
+        ("return_lag_1d", "REAL"), ("return_lag_2d", "REAL"), ("return_lag_3d", "REAL"),
+        ("return_lag_5d", "REAL"), ("return_lag_10d", "REAL"),
+        ("volatility_7d", "REAL"), ("volatility_14d", "REAL"), ("volatility_30d", "REAL"),
+        ("close_ma_7", "REAL"), ("close_ma_14", "REAL"), ("close_ma_30", "REAL"),
+        ("close_ma_ratio_7", "REAL"), ("close_ma_ratio_14", "REAL"), ("close_ma_ratio_30", "REAL"),
+        ("ewm_return_12", "REAL"), ("ewm_return_26", "REAL"),
+        ("high_low_ratio", "REAL"), ("close_open_ratio", "REAL"),
+        ("year", "INTEGER"), ("quarter", "INTEGER"), ("month", "INTEGER"),
+        ("week_of_year", "INTEGER"), ("day_of_week", "INTEGER"),
+        ("is_weekend", "INTEGER"), ("is_month_start", "INTEGER"),
+        ("is_month_end", "INTEGER"), ("is_quarter_end", "INTEGER"),
+        ("day_name", "TEXT"), ("month_name", "TEXT"), ("week_number", "INTEGER"),
+        ("is_holiday", "INTEGER"),
+        ("day_name_monday", "INTEGER"), ("day_name_tuesday", "INTEGER"),
+        ("day_name_wednesday", "INTEGER"), ("day_name_thursday", "INTEGER"),
+        ("day_name_friday", "INTEGER"),
+        ("month_name_january", "INTEGER"), ("month_name_february", "INTEGER"),
+        ("month_name_march", "INTEGER"), ("month_name_april", "INTEGER"),
+        ("month_name_may", "INTEGER"), ("month_name_june", "INTEGER"),
+        ("month_name_july", "INTEGER"), ("month_name_august", "INTEGER"),
+        ("month_name_september", "INTEGER"), ("month_name_october", "INTEGER"),
+        ("month_name_november", "INTEGER"), ("month_name_december", "INTEGER"),
+        ("quarter_1", "INTEGER"), ("quarter_2", "INTEGER"),
+        ("quarter_3", "INTEGER"), ("quarter_4", "INTEGER"),
+        ("day_of_month", "INTEGER"),
+        ("day_of_week_sin", "REAL"), ("day_of_week_cos", "REAL"),
+        ("month_sin", "REAL"), ("month_cos", "REAL"),
+        ("week_of_year_sin", "REAL"), ("week_of_year_cos", "REAL"),
+        ("day_of_month_sin", "REAL"), ("day_of_month_cos", "REAL"),
+    ]
+    add_columns_if_missing("stock_prices", features)
+
+    df = pd.read_sql(
+        "SELECT id, ticker, date, open, high, low, close, volume FROM stock_prices ORDER BY ticker, date",
+        engine,
+    )
+    df["date"] = pd.to_datetime(df["date"])
+
     result = []
-
     for ticker, group in df.groupby("ticker"):
         g = group.sort_values("date").copy()
+        idx = g.index
 
         g["daily_return"] = g["close"].pct_change()
         g["log_return"] = np.log(g["close"] / g["close"].shift(1))
-
         g["price_range"] = (g["high"] - g["low"]) / g["close"]
         g["gap"] = (g["open"] - g["close"].shift(1)) / g["close"].shift(1)
 
@@ -33,11 +115,11 @@ def engineer_stock_features(df):
         for lag in [1, 2, 3, 5, 10]:
             g[f"return_lag_{lag}d"] = g["daily_return"].shift(lag)
 
-        for window in [7, 14, 30]:
+        for w in [7, 14, 30]:
             shifted = g["daily_return"].shift(1)
-            g[f"volatility_{window}d"] = shifted.rolling(window).std()
-            g[f"close_ma_{window}"] = g["close"].shift(1).rolling(window).mean()
-            g[f"close_ma_ratio_{window}"] = g["close"] / (g[f"close_ma_{window}"] + 1e-8)
+            g[f"volatility_{w}d"] = shifted.rolling(w).std()
+            g[f"close_ma_{w}"] = g["close"].shift(1).rolling(w).mean()
+            g[f"close_ma_ratio_{w}"] = g["close"] / (g[f"close_ma_{w}"] + 1e-8)
 
         shifted = g["daily_return"].shift(1)
         g["ewm_return_12"] = shifted.ewm(span=12).mean()
@@ -48,172 +130,187 @@ def engineer_stock_features(df):
 
         result.append(g)
 
-    out = pd.concat(result, ignore_index=True)
-    print(f"    ✅ {len(out):,} rows, {len(out.columns)} features")
-    return out
+    updates = pd.concat(result, ignore_index=True)
 
-
-# ---------------------------------------------------------------------------
-# Market indicator features (per indicator)
-# ---------------------------------------------------------------------------
-def engineer_indicator_features(df):
-    print("  Building market indicator features...")
-    result = []
-
-    for indicator, group in df.groupby("indicator"):
-        g = group.sort_values("date").copy()
-        safe_name = indicator.lower().replace(" ", "_").replace("-", "_")
-
-        g[f"{safe_name}_return"] = g["close"].pct_change()
-        g[f"{safe_name}_log_return"] = np.log(g["close"] / g["close"].shift(1))
-
-        for lag in [1, 5, 10]:
-            g[f"{safe_name}_lag_{lag}d"] = g["close"].shift(lag)
-
-        shifted_ret = g[f"{safe_name}_return"].shift(1)
-        g[f"{safe_name}_vol_7d"] = shifted_ret.rolling(7).std()
-        g[f"{safe_name}_ma_7"] = g["close"].shift(1).rolling(7).mean()
-        g[f"{safe_name}_ma_30"] = g["close"].shift(1).rolling(30).mean()
-        g[f"{safe_name}_ma_ratio"] = g["close"] / (g[f"{safe_name}_ma_7"] + 1e-8)
-
-        result.append(g)
-
-    out = pd.concat(result, ignore_index=True)
-    pivot_cols = [c for c in out.columns if c not in ["date", "indicator", "ticker",
-                                                        "open", "high", "low", "close", "volume"]]
-    pivoted = out.pivot_table(index="date", columns="indicator", values=pivot_cols, aggfunc="first")
-    pivoted.columns = [f"{col}_{ind}" for col, ind in pivoted.columns]
-    pivoted = pivoted.reset_index()
-
-    print(f"    ✅ {len(pivoted):,} rows, {len(pivoted.columns)} features")
-    return pivoted
-
-
-# ---------------------------------------------------------------------------
-# News features (per day)
-# ---------------------------------------------------------------------------
-def engineer_news_features(news_df, hf_df):
-    print("  Building news features...")
-
-    all_news = pd.concat([
-        news_df[["date", "headline", "source", "headline_len"]].assign(dataset="live"),
-        hf_df[["date", "headline", "source", "headline_len"]].assign(dataset="hf"),
-    ], ignore_index=True)
-    all_news["date"] = pd.to_datetime(all_news["date"])
-
-    daily = all_news.groupby("date").agg(
-        news_count=("headline", "count"),
-        avg_headline_len=("headline_len", "mean"),
-        max_headline_len=("headline_len", "max"),
-        unique_sources=("source", "nunique"),
-    ).reset_index()
-
-    source_counts = all_news.groupby(["date", "source"]).size().unstack(fill_value=0)
-    source_counts.columns = [f"news_src_{c.replace(' ', '_').lower()}" for c in source_counts.columns]
-    source_counts = source_counts.reset_index()
-
-    live_only = all_news[all_news["dataset"] == "live"]
-    daily_live = live_only.groupby("date").size().reset_index(name="news_count_live")
-
-    hf_only = all_news[all_news["dataset"] == "hf"]
-    daily_hf = hf_only.groupby("date").size().reset_index(name="news_count_hf")
-
-    result = daily.merge(source_counts, on="date", how="left")
-    result = result.merge(daily_live, on="date", how="left")
-    result = result.merge(daily_hf, on="date", how="left")
-    result = result.fillna(0)
-
-    print(f"    ✅ {len(result):,} days, {len(result.columns)} features")
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Calendar / time features
-# ---------------------------------------------------------------------------
-def add_calendar_features(df):
-    print("  Adding calendar features...")
-    d = df["date"].copy() if "date" in df.columns else df.copy()
-
+    d = updates["date"]
     day_names = {0: 'Monday', 1: 'Tuesday', 2: 'Wednesday', 3: 'Thursday',
-                  4: 'Friday', 5: 'Saturday', 6: 'Sunday'}
+                 4: 'Friday', 5: 'Saturday', 6: 'Sunday'}
     month_names = {1: 'January', 2: 'February', 3: 'March', 4: 'April',
                    5: 'May', 6: 'June', 7: 'July', 8: 'August',
                    9: 'September', 10: 'October', 11: 'November', 12: 'December'}
 
-    cal = pd.DataFrame({
-        "year": d.dt.year,
-        "quarter": d.dt.quarter,
-        "month": d.dt.month,
-        "week_of_year": d.dt.isocalendar().week.astype(int),
-        "day_of_week": d.dt.dayofweek,
-        "is_weekend": d.dt.dayofweek.isin([5, 6]).astype(int),
-        "is_month_start": d.dt.is_month_start.astype(int),
-        "is_month_end": d.dt.is_month_end.astype(int),
-        "is_quarter_end": d.dt.is_quarter_end.astype(int),
-        "day_name": d.dt.dayofweek.map(day_names),
-        "month_name": d.dt.month.map(month_names),
-        "week_number": d.dt.isocalendar().week.astype(int),
+    updates["year"] = d.dt.year
+    updates["quarter"] = d.dt.quarter
+    updates["month"] = d.dt.month
+    updates["week_of_year"] = d.dt.isocalendar().week.astype(int)
+    updates["day_of_week"] = d.dt.dayofweek
+    updates["is_weekend"] = d.dt.dayofweek.isin([5, 6]).astype(int)
+    updates["is_month_start"] = d.dt.is_month_start.astype(int)
+    updates["is_month_end"] = d.dt.is_month_end.astype(int)
+    updates["is_quarter_end"] = d.dt.is_quarter_end.astype(int)
+    updates["day_name"] = d.dt.dayofweek.map(day_names)
+    updates["month_name"] = d.dt.month.map(month_names)
+    updates["week_number"] = d.dt.isocalendar().week.astype(int)
+    updates["day_of_month"] = d.dt.day
+
+    updates["day_of_week_sin"] = np.sin(2 * np.pi * updates["day_of_week"] / 7)
+    updates["day_of_week_cos"] = np.cos(2 * np.pi * updates["day_of_week"] / 7)
+    updates["month_sin"] = np.sin(2 * np.pi * updates["month"] / 12)
+    updates["month_cos"] = np.cos(2 * np.pi * updates["month"] / 12)
+    updates["week_of_year_sin"] = np.sin(2 * np.pi * updates["week_of_year"] / 52)
+    updates["week_of_year_cos"] = np.cos(2 * np.pi * updates["week_of_year"] / 52)
+    updates["day_of_month_sin"] = np.sin(2 * np.pi * updates["day_of_month"] / 31)
+    updates["day_of_month_cos"] = np.cos(2 * np.pi * updates["day_of_month"] / 31)
+
+    from sklearn.preprocessing import OneHotEncoder as OHE
+    cat_df = pd.DataFrame({
+        "day_name": updates["day_name"],
+        "month_name": updates["month_name"],
+        "quarter": updates["quarter"],
     })
+    enc = OHE(sparse_output=False, handle_unknown="ignore")
+    enc.fit(cat_df.fillna("unknown"))
+    encoded = enc.transform(cat_df.fillna("unknown"))
+    for i, col in enumerate(enc.get_feature_names_out()):
+        updates[col.replace(" ", "_").lower()] = encoded[:, i].astype(int)
 
-    df = pd.concat([df.reset_index(drop=True), cal.reset_index(drop=True)], axis=1)
-    print(f"    ✅ Added {len(cal.columns)} calendar features")
-    return df
+    import holidays as hol
+    us_holidays = hol.US(years=range(2018, 2027))
+    updates["is_holiday"] = updates["date"].apply(
+        lambda x: 1 if pd.to_datetime(x).date() in us_holidays else 0
+    )
+
+    stock_cols = ["daily_return", "log_return", "price_range", "gap",
+                  "volume_change", "volume_ma_7", "volume_ratio",
+                  "return_lag_1d", "return_lag_2d", "return_lag_3d", "return_lag_5d", "return_lag_10d",
+                  "volatility_7d", "volatility_14d", "volatility_30d",
+                  "close_ma_7", "close_ma_14", "close_ma_30",
+                  "close_ma_ratio_7", "close_ma_ratio_14", "close_ma_ratio_30",
+                  "ewm_return_12", "ewm_return_26", "high_low_ratio", "close_open_ratio",
+                  "year", "quarter", "month", "week_of_year", "day_of_week", "day_of_month",
+                  "is_weekend", "is_month_start", "is_month_end", "is_quarter_end",
+                  "day_name", "month_name", "week_number", "is_holiday",
+                  "day_of_week_sin", "day_of_week_cos",
+                  "month_sin", "month_cos",
+                  "week_of_year_sin", "week_of_year_cos",
+                  "day_of_month_sin", "day_of_month_cos"]
+    ohe_cols = [c for c in updates.columns if c.startswith("day_name_") or c.startswith("month_name_") or c.startswith("quarter_")]
+    update_cols = stock_cols + ohe_cols
+    updates = updates.where(pd.notnull(updates), None)
+    batch_update("stock_prices", updates, columns=update_cols)
+
+    print(f"    ✅ Updated {len(updates):,} rows")
 
 
 # ---------------------------------------------------------------------------
-# Build unified feature matrix
+# Market indicator features (per indicator) — writes back to DB
 # ---------------------------------------------------------------------------
-def build_feature_matrix():
-    print("\n🔧 Building feature matrix...\n")
+def add_indicator_features():
+    print("📊 Adding features to market_indicators...")
 
-    print("Loading cleaned data...")
-    stock = pd.read_csv(os.path.join(CLEANED_DIR, "stock_prices_clean.csv"), parse_dates=["date"])
-    indicators = pd.read_csv(os.path.join(CLEANED_DIR, "market_indicators_clean.csv"), parse_dates=["date"])
-    news = pd.read_csv(os.path.join(CLEANED_DIR, "news_articles_clean.csv"), parse_dates=["date"])
-    hf = pd.read_csv(os.path.join(CLEANED_DIR, "hf_news_clean.csv"), parse_dates=["date"])
+    features = [
+        ("indicator_return", "REAL"), ("indicator_log_return", "REAL"),
+        ("indicator_lag_1d", "REAL"), ("indicator_lag_5d", "REAL"), ("indicator_lag_10d", "REAL"),
+        ("indicator_vol_7d", "REAL"),
+        ("indicator_ma_7", "REAL"), ("indicator_ma_30", "REAL"), ("indicator_ma_ratio", "REAL"),
+        ("indicator_ewm_12", "REAL"),
+    ]
+    add_columns_if_missing("market_indicators", features)
 
-    stock_features = engineer_stock_features(stock)
-    indicator_features = engineer_indicator_features(indicators)
-    news_features = engineer_news_features(news, hf)
+    df = pd.read_sql(
+        "SELECT id, date, close, indicator FROM market_indicators ORDER BY indicator, date",
+        engine,
+    )
+    df["date"] = pd.to_datetime(df["date"])
 
-    print("  Merging all features...")
-    matrix = stock_features.merge(indicator_features, on="date", how="left")
-    matrix = matrix.merge(news_features, on="date", how="left")
+    updates = pd.DataFrame(index=df.index)
+    updates["id"] = df["id"]
 
-    matrix = add_calendar_features(matrix)
+    updates["indicator_return"] = df.groupby("indicator")["close"].pct_change()
+    updates["indicator_log_return"] = df.groupby("indicator").apply(
+        lambda g: np.log(g["close"] / g["close"].shift(1)), include_groups=False
+    ).reset_index(level=0, drop=True)
 
-    matrix = matrix.sort_values(["ticker", "date"]).reset_index(drop=True)
+    for lag in [1, 5, 10]:
+        updates[f"indicator_lag_{lag}d"] = df.groupby("indicator")["close"].shift(lag)
 
-    numeric_cols = matrix.select_dtypes(include=[np.number]).columns
-    matrix[numeric_cols] = matrix.groupby("ticker")[numeric_cols].transform(lambda x: x.ffill())
-    matrix = matrix.fillna(0)
+    shifted = updates.groupby(df["indicator"])["indicator_return"].shift(1)
+    updates["indicator_vol_7d"] = shifted.rolling(7).mean()
 
-    print(f"\n  Dropping low-variance columns...")
-    zero_var = [c for c in matrix.columns if matrix[c].nunique() <= 1]
-    matrix = matrix.drop(columns=zero_var, errors="ignore")
-    print(f"    Removed {len(zero_var)} constant columns")
+    updates["indicator_ma_7"] = df.groupby("indicator")["close"].shift(1).rolling(7).mean()
+    updates["indicator_ma_30"] = df.groupby("indicator")["close"].shift(1).rolling(30).mean()
+    updates["indicator_ma_ratio"] = df["close"] / (updates["indicator_ma_7"] + 1e-8)
+    updates["indicator_ewm_12"] = shifted.ewm(span=12).mean()
 
-    corr = matrix.select_dtypes(include=[np.number]).corr().abs()
-    upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
-    high_corr = [col for col in upper.columns if any(upper[col] > 0.95)]
-    matrix = matrix.drop(columns=high_corr, errors="ignore")
-    print(f"    Removed {len(high_corr)} highly correlated features (>0.95)")
+    updates = updates.where(pd.notnull(updates), None)
+    batch_update("market_indicators", updates)
 
-    output_path = os.path.join(OUTPUT_DIR, "feature_matrix.csv")
-    matrix.to_csv(output_path, index=False)
-
-    print(f"\n{'='*50}")
-    print(f"✅ Feature matrix built!")
-    print(f"📊 Shape: {matrix.shape[0]:,} rows x {matrix.shape[1]} features")
-    print(f"📂 Saved to: {output_path}")
-    print(f"{'='*50}")
-
-    print(f"\nFeature columns:")
-    for i, col in enumerate(matrix.columns, 1):
-        print(f"  {i:3d}. {col}")
-
-    return matrix
+    print(f"    ✅ Updated {len(updates):,} rows")
 
 
+# ---------------------------------------------------------------------------
+# News features — per-row + daily aggregates, writes back to DB
+# ---------------------------------------------------------------------------
+def add_news_features():
+    print("📰 Adding features to news_articles...")
+
+    features = [
+        ("headline_len", "INTEGER"),
+        ("daily_article_count", "INTEGER"),
+        ("daily_source_count", "INTEGER"),
+    ]
+    add_columns_if_missing("news_articles", features)
+
+    df = pd.read_sql("SELECT id, date, headline, source FROM news_articles", engine)
+    df["date"] = pd.to_datetime(df["date"])
+    df["headline_len"] = df["headline"].str.len()
+
+    daily_counts = df.groupby("date").size().rename("daily_article_count")
+    daily_sources = df.groupby("date")["source"].nunique().rename("daily_source_count")
+    df = df.join(daily_counts, on="date").join(daily_sources, on="date")
+
+    updates = df[["id", "headline_len", "daily_article_count", "daily_source_count"]].copy()
+    updates = updates.where(pd.notnull(updates), None)
+    batch_update("news_articles", updates)
+
+    print(f"    ✅ Updated {len(df):,} rows")
+
+
+# ---------------------------------------------------------------------------
+# HF news features — per-row + daily counts, writes back to DB
+# ---------------------------------------------------------------------------
+def add_hf_features():
+    print("📚 Adding features to hf_news...")
+
+    features = [
+        ("headline_len", "INTEGER"),
+        ("daily_article_count", "INTEGER"),
+    ]
+    add_columns_if_missing("hf_news", features)
+
+    df = pd.read_sql("SELECT id, date, headline FROM hf_news", engine)
+    df["date"] = pd.to_datetime(df["date"])
+    df["headline_len"] = df["headline"].str.len()
+
+    daily_counts = df.groupby("date").size().rename("daily_article_count")
+    df = df.join(daily_counts, on="date")
+
+    updates = df[["id", "headline_len", "daily_article_count"]].copy()
+    updates = updates.where(pd.notnull(updates), None)
+    batch_update("hf_news", updates)
+
+    print(f"    ✅ Updated {len(df):,} rows")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    build_feature_matrix()
+    print("🔧 Adding features to database tables...\n")
+    add_stock_features()
+    add_indicator_features()
+    add_news_features()
+    add_hf_features()
+    print(f"\n{'='*50}")
+    print("✅ All features added to database!")
+    print(f"{'='*50}")
