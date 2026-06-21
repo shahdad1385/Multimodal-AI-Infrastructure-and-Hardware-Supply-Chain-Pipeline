@@ -9,3 +9,5 @@ __pycache__/
 venv/
 .venv/
 *mimo*
+kubectl
+minikube-linux-amd64
